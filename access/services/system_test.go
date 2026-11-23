@@ -108,3 +108,54 @@ func TestCheckReadiness_TransportError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, 0, status)
 }
+
+func TestSystemService_DoesNotFollowRedirects(t *testing.T) {
+	targetHits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits++
+		_, _ = w.Write([]byte("QUJD"))
+	}))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer server.Close()
+	service := newTestSystemService(t, server.URL)
+
+	status, err := service.CheckReadiness()
+	assert.ErrorContains(t, err, "redirects aren't followed")
+	assert.ErrorContains(t, err, target.URL)
+	assert.Zero(t, status)
+
+	_, err = service.GetRootCertificate()
+	assert.ErrorContains(t, err, "redirects aren't followed")
+	assert.ErrorContains(t, err, "api/v1/cert/root")
+	assert.Zero(t, targetHits)
+}
+
+func TestSystemService_RedirectStatusWithoutLocation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	service := newTestSystemService(t, server.URL)
+
+	_, err := service.CheckReadiness()
+	assert.ErrorContains(t, err, "redirects aren't followed")
+	_, err = service.GetRootCertificate()
+	assert.ErrorContains(t, err, "redirects aren't followed")
+}
+
+func TestGetRootCertificate_ErrorOmitsResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("\x1b[31mspoofed body"))
+	}))
+	defer server.Close()
+
+	_, err := newTestSystemService(t, server.URL).GetRootCertificate()
+	assert.ErrorContains(t, err, "404")
+	assert.NotContains(t, err.Error(), "spoofed body")
+	assert.NotContains(t, err.Error(), "\x1b")
+	assert.NotContains(t, err.Error(), "server response")
+}

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -26,21 +27,39 @@ func NewSystemService(client *jfroghttpclient.JfrogHttpClient) *SystemService {
 
 func (ss *SystemService) GetRootCertificate() (string, error) {
 	anonymous := httputils.HttpClientDetails{}
-	resp, body, _, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+rootCertificateApi, true, &anonymous)
+	resp, body, redirectUrl, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+rootCertificateApi, false, &anonymous)
+	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
+		return "", errorutils.CheckErrorf("GET %s: %s", rootCertificateApi, redirectErr.Error())
+	}
 	if resp == nil {
 		return "", err
 	}
-	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
-		return "", errorutils.CheckErrorf("GET %s: %s", rootCertificateApi, err.Error())
+	if resp.StatusCode != http.StatusOK {
+		return "", errorutils.CheckErrorf("GET %s: unexpected status %d", rootCertificateApi, resp.StatusCode)
 	}
 	return strings.TrimSpace(string(body)), nil
 }
 
 func (ss *SystemService) CheckReadiness() (int, error) {
 	httpDetails := ss.ServiceDetails.CreateHttpClientDetails()
-	resp, _, _, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+readinessApi, true, &httpDetails)
+	resp, _, redirectUrl, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+readinessApi, false, &httpDetails)
+	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
+		return 0, errorutils.CheckErrorf("GET %s: %s", readinessApi, redirectErr.Error())
+	}
 	if resp == nil {
 		return 0, err
 	}
 	return resp.StatusCode, nil
+}
+
+// Redirects aren't followed: Go forwards the Authorization header to any port or scheme on the same host and drops it
+// for other hosts, so following one could send the token in cleartext or turn the check into an anonymous request.
+func redirectError(resp *http.Response, redirectUrl string) error {
+	if redirectUrl == "" && (resp == nil || resp.StatusCode < 300 || resp.StatusCode >= 400) {
+		return nil
+	}
+	if redirectUrl == "" {
+		redirectUrl = resp.Header.Get("Location")
+	}
+	return fmt.Errorf("the server redirected the request to %q, and redirects aren't followed; configure the server's final URL", redirectUrl)
 }
