@@ -31,22 +31,10 @@ type Payload struct {
 	Ext string      `json:"ext,omitempty"`
 }
 
-type ParsedExt struct {
-	Revocable  interface{} `json:"revocable,omitempty"`
-	Sid        string      `json:"sid,omitempty"`
-	Ssi        string      `json:"ssi,omitempty"`
-	Rpp        interface{} `json:"rpp,omitempty"`
-	Rlm        string      `json:"rlm,omitempty"`
-	Llt        interface{} `json:"llt,omitempty"`
-	Pud        interface{} `json:"pud,omitempty"`
-	ProjectKey string      `json:"projectKey,omitempty"`
-}
-
 type ParsedToken struct {
-	Header    Header
-	Payload   Payload
-	ParsedExt *ParsedExt
-	Claims    map[string]interface{}
+	Header  Header
+	Payload Payload
+	Claims  map[string]interface{}
 }
 
 func (p *Payload) AudAsStringSlice() []string {
@@ -111,20 +99,10 @@ func ParseToken(rawToken string) (*ParsedToken, error) {
 		return nil, errorutils.CheckErrorf("failed to parse JWT payload: %w", err)
 	}
 
-	parsed := &ParsedToken{Header: header, Payload: payload, Claims: claims}
-	if payload.Ext != "" {
-		var ext ParsedExt
-		if err = json.Unmarshal([]byte(payload.Ext), &ext); err != nil {
-			return nil, errorutils.CheckErrorf("failed to parse ext field as JSON: %w", err)
-		}
-		parsed.ParsedExt = &ext
-		extClaims, err := decodeClaims([]byte(payload.Ext))
-		if err != nil {
-			return nil, errorutils.CheckErrorf("failed to parse ext field as JSON: %w", err)
-		}
-		claims["ext"] = extClaims
+	if ext, extErr := decodeClaims([]byte(payload.Ext)); extErr == nil && ext != nil {
+		claims["ext"] = ext
 	}
-	return parsed, nil
+	return &ParsedToken{Header: header, Payload: payload, Claims: claims}, nil
 }
 
 func decodeClaims(data []byte) (map[string]interface{}, error) {
@@ -182,7 +160,7 @@ func ValidatePayloadFields(payload Payload) error {
 		return errorutils.CheckErrorf("missing required field: sub")
 	case payload.AudAsString() == "":
 		return errorutils.CheckErrorf("missing required field: aud")
-	case payload.Scp == "":
+	case len(payload.Scopes()) == 0:
 		return errorutils.CheckErrorf("missing required field: scp (empty scope)")
 	case payload.Iss == "":
 		return errorutils.CheckErrorf("missing required field: iss")

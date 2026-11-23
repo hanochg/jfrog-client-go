@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"math/big"
 	"strings"
 	"testing"
@@ -85,7 +86,7 @@ func TestParseToken_ValidToken(t *testing.T) {
 	assert.Equal(t, "2", parsed.Header.Ver)
 	assert.Equal(t, "test-jti-12345", parsed.Payload.Jti)
 	assert.Equal(t, "applied-permissions/admin", parsed.Payload.Scp)
-	require.NotNil(t, parsed.ParsedExt)
+	assert.Equal(t, map[string]interface{}{"revocable": "true"}, parsed.Claims["ext"])
 }
 
 func TestParseToken_InvalidFormat(t *testing.T) {
@@ -93,12 +94,24 @@ func TestParseToken_InvalidFormat(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseToken_InvalidExtJSON(t *testing.T) {
+func TestParseToken_ExtIsNotValidated(t *testing.T) {
 	_, privKey := generateTestCert(t)
-	claims := standardClaims()
-	claims["ext"] = "not-valid-json"
-	_, err := ParseToken(createSignedToken(t, privKey, standardHeader(), claims))
-	assert.Error(t, err)
+	for _, tc := range []struct {
+		ext  string
+		want interface{}
+	}{
+		{`{"sid":123,"rlm":true,"projectKey":5}`, map[string]interface{}{"sid": json.Number("123"), "rlm": true, "projectKey": json.Number("5")}},
+		{`not-valid-json`, `not-valid-json`},
+		{`null`, `null`},
+		{`["a"]`, `["a"]`},
+	} {
+		claims := standardClaims()
+		claims["ext"] = tc.ext
+		parsed, err := ParseToken(createSignedToken(t, privKey, standardHeader(), claims))
+		require.NoError(t, err, tc.ext)
+		assert.Equal(t, tc.ext, parsed.Payload.Ext)
+		assert.Equal(t, tc.want, parsed.Claims["ext"], tc.ext)
+	}
 }
 
 func TestParseToken_NoExt(t *testing.T) {
@@ -107,7 +120,7 @@ func TestParseToken_NoExt(t *testing.T) {
 	delete(claims, "ext")
 	parsed, err := ParseToken(createSignedToken(t, privKey, standardHeader(), claims))
 	require.NoError(t, err)
-	assert.Nil(t, parsed.ParsedExt)
+	assert.NotContains(t, parsed.Claims, "ext")
 }
 
 func TestParseToken_Base64URLSegments(t *testing.T) {
@@ -220,8 +233,10 @@ func TestValidatePayloadFields_MissingSub(t *testing.T) {
 }
 
 func TestValidatePayloadFields_EmptyScp(t *testing.T) {
-	p := Payload{Jti: "jti", Sub: "sub", Aud: "aud", Iss: "iss", Iat: 1, Exp: 2}
-	assert.EqualError(t, ValidatePayloadFields(p), "missing required field: scp (empty scope)")
+	for _, scp := range []string{"", "   ", `""`, `"" ""`} {
+		p := Payload{Jti: "jti", Sub: "sub", Aud: "aud", Scp: scp, Iss: "iss", Iat: 1, Exp: 2}
+		assert.EqualError(t, ValidatePayloadFields(p), "missing required field: scp (empty scope)", scp)
+	}
 }
 
 func TestValidatePayloadFields_ExpNotGreaterThanIat(t *testing.T) {
