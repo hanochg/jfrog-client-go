@@ -13,7 +13,6 @@ import (
 
 const (
 	rootCertificateApi = "api/v1/cert/root"
-	readinessApi       = "api/v1/system/readiness"
 )
 
 type SystemService struct {
@@ -38,18 +37,6 @@ func (ss *SystemService) GetRootCertificate() (string, error) {
 		return "", errorutils.CheckErrorf("GET %s: unexpected status %d", rootCertificateApi, resp.StatusCode)
 	}
 	return strings.TrimSpace(string(body)), nil
-}
-
-func (ss *SystemService) CheckReadiness() (int, error) {
-	httpDetails := ss.ServiceDetails.CreateHttpClientDetails()
-	resp, _, redirectUrl, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+readinessApi, false, &httpDetails)
-	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
-		return 0, errorutils.CheckErrorf("GET %s: %s", readinessApi, redirectErr.Error())
-	}
-	if resp == nil {
-		return 0, err
-	}
-	return resp.StatusCode, nil
 }
 
 // Redirects aren't followed: Go forwards the Authorization header to any port or scheme on the same host and drops it

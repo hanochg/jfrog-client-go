@@ -48,10 +48,10 @@ func (sm *AccessServicesManager) GetRootCertificate() (string, error) {
 	return systemService.GetRootCertificate()
 }
 
-func (sm *AccessServicesManager) CheckReadiness() (int, error) {
-	systemService := services.NewSystemService(sm.client)
-	systemService.ServiceDetails = sm.config.GetServiceDetails()
-	return systemService.CheckReadiness()
+func (sm *AccessServicesManager) GetOwnTokenDetails() (int, map[string]interface{}, error) {
+	tokenService := services.NewTokenService(sm.client)
+	tokenService.ServiceDetails = sm.config.GetServiceDetails()
+	return tokenService.GetOwnTokenDetails()
 }
 
 func (sm *AccessServicesManager) CreateProject(params services.ProjectParams) error {
