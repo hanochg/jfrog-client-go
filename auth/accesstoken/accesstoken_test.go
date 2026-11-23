@@ -286,15 +286,6 @@ func TestParseRootCertificate_TrimsWhitespace(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestPayload_Scopes(t *testing.T) {
-	p := Payload{Scp: "applied-permissions/user system:metrics:r"}
-	assert.Equal(t, []string{"applied-permissions/user", "system:metrics:r"}, p.Scopes())
-}
-
-func TestPayload_ScopesEmpty(t *testing.T) {
-	assert.Nil(t, (&Payload{}).Scopes())
-}
-
 func TestPayload_AudAsStringSlice_String(t *testing.T) {
 	assert.Equal(t, []string{"*@*"}, (&Payload{Aud: "*@*"}).AudAsStringSlice())
 }

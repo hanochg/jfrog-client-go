@@ -78,13 +78,6 @@ func (p *Payload) ExpTime() time.Time {
 	return time.Unix(int64(p.Exp), 0)
 }
 
-func (p *Payload) Scopes() []string {
-	if p.Scp == "" {
-		return nil
-	}
-	return strings.Fields(p.Scp)
-}
-
 // Not jwt.DecodeSegment: its behaviour depends on the package-level DecodePaddingAllowed and DecodeStrict settings.
 func DecodeSegment(seg string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(strings.TrimRight(seg, "="))
