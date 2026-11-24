@@ -74,8 +74,9 @@ func TestGetRootCertificate_DoesNotFollowRedirects(t *testing.T) {
 		_, _ = w.Write([]byte("QUJD"))
 	}))
 	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL+"/elsewhere")
+		w.WriteHeader(http.StatusFound)
 	}))
 	defer server.Close()
 

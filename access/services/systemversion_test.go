@@ -83,8 +83,9 @@ func TestCheckSystemVersion_DoesNotFollowRedirects(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL+"/elsewhere", http.StatusFound)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL+"/elsewhere")
+		w.WriteHeader(http.StatusFound)
 	}))
 	defer server.Close()
 
