@@ -12,8 +12,6 @@ import (
 // jfrog-ignore - not a real token
 const ownTokenDetailsApi = tokensApi + "/me"
 
-// GetOwnTokenDetails asks Access for the details of the token the request is authenticated with, which works for JWT
-// and reference tokens alike. The status is returned whenever the server answered; details are set only on 200.
 func (ps *TokenService) GetOwnTokenDetails() (int, map[string]interface{}, error) {
 	httpDetails := ps.ServiceDetails.CreateHttpClientDetails()
 	resp, body, redirectUrl, err := ps.client.SendGet(ps.ServiceDetails.GetUrl()+ownTokenDetailsApi, false, &httpDetails)

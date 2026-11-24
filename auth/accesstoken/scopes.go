@@ -5,8 +5,6 @@ import (
 	"unicode"
 )
 
-// Scopes splits scp at whitespace outside double quotes; a backslash escapes the next character.
-// Each scope is returned as written, quotes and backslashes included.
 func (p *Payload) Scopes() []string {
 	var scopes []string
 	var current strings.Builder
@@ -36,7 +34,6 @@ func appendScope(scopes []string, scope string) []string {
 	return append(scopes, scope)
 }
 
-// UnquoteScope removes the quotes of a scope and resolves its backslash escapes; a trailing backslash is kept.
 func UnquoteScope(scope string) string {
 	var unquoted strings.Builder
 	escaped := false
