@@ -48,6 +48,12 @@ func (sm *AccessServicesManager) GetRootCertificate() (string, error) {
 	return systemService.GetRootCertificate()
 }
 
+func (sm *AccessServicesManager) CheckSystemVersion() (int, error) {
+	systemService := services.NewSystemService(sm.client)
+	systemService.ServiceDetails = sm.config.GetServiceDetails()
+	return systemService.CheckSystemVersion()
+}
+
 func (sm *AccessServicesManager) GetOwnTokenDetails() (int, map[string]interface{}, error) {
 	tokenService := services.NewTokenService(sm.client)
 	tokenService.ServiceDetails = sm.config.GetServiceDetails()

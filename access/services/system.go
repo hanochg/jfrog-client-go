@@ -13,6 +13,7 @@ import (
 
 const (
 	rootCertificateApi = "api/v1/cert/root"
+	systemVersionApi   = "api/v1/system/version"
 )
 
 type SystemService struct {
@@ -37,6 +38,23 @@ func (ss *SystemService) GetRootCertificate() (string, error) {
 		return "", errorutils.CheckErrorf("GET %s: unexpected status %d", rootCertificateApi, resp.StatusCode)
 	}
 	return strings.TrimSpace(string(body)), nil
+}
+
+// Only the token being checked is sent, and the call is never made without it, so it can never succeed anonymously.
+func (ss *SystemService) CheckSystemVersion() (int, error) {
+	accessToken := ss.ServiceDetails.GetAccessToken()
+	if accessToken == "" {
+		return 0, errorutils.CheckErrorf("GET %s: no access token to check", systemVersionApi)
+	}
+	httpDetails := httputils.HttpClientDetails{AccessToken: accessToken}
+	resp, _, redirectUrl, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+systemVersionApi, false, &httpDetails)
+	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
+		return 0, errorutils.CheckErrorf("GET %s: %s", systemVersionApi, redirectErr.Error())
+	}
+	if resp == nil {
+		return 0, err
+	}
+	return resp.StatusCode, nil
 }
 
 // Redirects aren't followed: Go forwards the Authorization header to any port or scheme on the same host and drops it
