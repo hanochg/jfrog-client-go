@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	rootCertificateApi = "api/v1/cert/root"
-	systemVersionApi   = "api/v1/system/version"
+	rootCertificateApi    = "api/v1/cert/root"
+	accessPath            = "access/"
+	artifactoryVersionApi = "artifactory/api/system/version"
 )
 
 type SystemService struct {
@@ -41,15 +42,19 @@ func (ss *SystemService) GetRootCertificate() (string, error) {
 }
 
 // Only the token being checked is sent, and the call is never made without it, so it can never succeed anonymously.
-func (ss *SystemService) CheckSystemVersion() (int, error) {
+func (ss *SystemService) CheckArtifactoryVersion() (int, error) {
 	accessToken := ss.ServiceDetails.GetAccessToken()
 	if accessToken == "" {
-		return 0, errorutils.CheckErrorf("GET %s: no access token to check", systemVersionApi)
+		return 0, errorutils.CheckErrorf("GET %s: no access token to check", artifactoryVersionApi)
+	}
+	platformUrl, ok := strings.CutSuffix(ss.ServiceDetails.GetUrl(), accessPath)
+	if !ok {
+		return 0, errorutils.CheckErrorf("GET %s: the Access URL %q doesn't end with %s, so the platform URL is unknown", artifactoryVersionApi, ss.ServiceDetails.GetUrl(), accessPath)
 	}
 	httpDetails := httputils.HttpClientDetails{AccessToken: accessToken}
-	resp, _, redirectUrl, err := ss.client.SendGet(ss.ServiceDetails.GetUrl()+systemVersionApi, false, &httpDetails)
+	resp, _, redirectUrl, err := ss.client.SendGet(platformUrl+artifactoryVersionApi, false, &httpDetails)
 	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
-		return 0, errorutils.CheckErrorf("GET %s: %s", systemVersionApi, redirectErr.Error())
+		return 0, errorutils.CheckErrorf("GET %s: %s", artifactoryVersionApi, redirectErr.Error())
 	}
 	if resp == nil {
 		return 0, err
