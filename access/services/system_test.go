@@ -168,7 +168,7 @@ func TestGetArtifactoryVersion_RefusesAnAccessUrlWithoutAccessPath(t *testing.T)
 	assert.Zero(t, hits)
 }
 
-func TestGetArtifactoryVersion_RejectedTokenIsNotRetried(t *testing.T) {
+func TestGetArtifactoryVersion_AuthResponseIsNotRetried(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		hits := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -177,9 +177,9 @@ func TestGetArtifactoryVersion_RejectedTokenIsNotRetried(t *testing.T) {
 		}))
 		version, err := newTestSystemService(t, server.URL, 3).GetArtifactoryVersion()
 		server.Close()
-		var rejected *TokenRejectedError
+		var rejected *AuthResponseError
 		require.ErrorAs(t, err, &rejected)
-		assert.Equal(t, &TokenRejectedError{StatusCode: code, Api: "artifactory/api/system/version"}, rejected)
+		assert.Equal(t, &AuthResponseError{StatusCode: code, Api: "artifactory/api/system/version"}, rejected)
 		assert.Nil(t, version)
 		assert.Equal(t, 1, hits)
 	}

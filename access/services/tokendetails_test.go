@@ -65,7 +65,7 @@ func TestGetOwnTokenDetails_FieldsAreOptional(t *testing.T) {
 	assert.Equal(t, &TokenDetails{TokenId: "id-1", Expiry: &expiry}, details)
 }
 
-func TestGetOwnTokenDetails_RejectedTokenIsNotRetried(t *testing.T) {
+func TestGetOwnTokenDetails_AuthResponseIsNotRetried(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		hits := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -74,9 +74,9 @@ func TestGetOwnTokenDetails_RejectedTokenIsNotRetried(t *testing.T) {
 		}))
 		details, err := newTestTokenService(t, server.URL, 2).GetOwnTokenDetails()
 		server.Close()
-		var rejected *TokenRejectedError
+		var rejected *AuthResponseError
 		require.ErrorAs(t, err, &rejected)
-		assert.Equal(t, &TokenRejectedError{StatusCode: code, Api: "api/v1/tokens/me"}, rejected)
+		assert.Equal(t, &AuthResponseError{StatusCode: code, Api: "api/v1/tokens/me"}, rejected)
 		assert.Nil(t, details)
 		assert.Equal(t, 1, hits)
 	}
