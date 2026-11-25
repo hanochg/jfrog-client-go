@@ -16,9 +16,11 @@ func newTestTokenService(t *testing.T, serverUrl string, retries int) *TokenServ
 	return service
 }
 
+// #nosec G101 -- False positive - no hardcoded credentials.
+// jfrog-ignore - not a real token
 const ownTokenDetailsResponse = `{
-  "token_id": "ecb9bfab-57b0-4683-b1a3-1d85acadcae0",
-  "subject": "jfac@01epbwg4fcnwfx1v868vmh04t7/users/hanochg",
+  "token_id": "00000000-0000-4000-8000-000000000001",
+  "subject": "jfac@01epbwg4fcnwfx1v868vmh04t7/users/alice",
   "issued_at": 1795600937,
   "issuer": "jfac@01epbwg4fcnwfx1v868vmh04t7",
   "audience": "*@*",
@@ -41,8 +43,8 @@ func TestGetOwnTokenDetails_SendsTokenAndDecodesTheResponse(t *testing.T) {
 	require.NoError(t, err)
 	issuedAt, lastUsed, refreshable := int64(1795600937), int64(1795600945), false
 	assert.Equal(t, &TokenDetails{
-		TokenId:     "ecb9bfab-57b0-4683-b1a3-1d85acadcae0",
-		Subject:     "jfac@01epbwg4fcnwfx1v868vmh04t7/users/hanochg",
+		TokenId:     "00000000-0000-4000-8000-000000000001",
+		Subject:     "jfac@01epbwg4fcnwfx1v868vmh04t7/users/alice",
 		IssuedAt:    &issuedAt,
 		Issuer:      "jfac@01epbwg4fcnwfx1v868vmh04t7",
 		Audience:    "*@*",

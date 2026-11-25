@@ -54,12 +54,11 @@ func newRedirectingServer(t *testing.T) (*httptest.Server, *int) {
 	return server, &targetHits
 }
 
-func assertResponseError(t *testing.T, err error, statusCode int) *errorutils.HttpResponseError {
+func assertResponseError(t *testing.T, err error, statusCode int) {
 	t.Helper()
 	var responseErr *errorutils.HttpResponseError
 	require.ErrorAs(t, err, &responseErr)
 	assert.Equal(t, statusCode, responseErr.StatusCode)
-	return responseErr
 }
 
 func TestGetRootCertificate_NoAuthHeader(t *testing.T) {
