@@ -48,13 +48,13 @@ func (sm *AccessServicesManager) GetRootCertificate() (string, error) {
 	return systemService.GetRootCertificate()
 }
 
-func (sm *AccessServicesManager) CheckArtifactoryVersion() (int, error) {
+func (sm *AccessServicesManager) GetArtifactoryVersion() (*services.ArtifactoryVersion, error) {
 	systemService := services.NewSystemService(sm.client)
 	systemService.ServiceDetails = sm.config.GetServiceDetails()
-	return systemService.CheckArtifactoryVersion()
+	return systemService.GetArtifactoryVersion()
 }
 
-func (sm *AccessServicesManager) GetOwnTokenDetails() (int, map[string]interface{}, error) {
+func (sm *AccessServicesManager) GetOwnTokenDetails() (*services.TokenDetails, error) {
 	tokenService := services.NewTokenService(sm.client)
 	tokenService.ServiceDetails = sm.config.GetServiceDetails()
 	return tokenService.GetOwnTokenDetails()

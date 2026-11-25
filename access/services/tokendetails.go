@@ -1,9 +1,7 @@
 package services
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http"
 
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 )
@@ -12,23 +10,30 @@ import (
 // jfrog-ignore - not a real token
 const ownTokenDetailsApi = tokensApi + "/me"
 
-func (ps *TokenService) GetOwnTokenDetails() (int, map[string]interface{}, error) {
+type TokenDetails struct {
+	TokenId     string `json:"token_id,omitempty"`
+	Subject     string `json:"subject,omitempty"`
+	IssuedAt    *int64 `json:"issued_at,omitempty"`
+	Expiry      *int64 `json:"expiry,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	Audience    string `json:"audience,omitempty"`
+	Description string `json:"description,omitempty"`
+	Refreshable *bool  `json:"refreshable,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	ProjectKey  string `json:"project_key,omitempty"`
+	LastUsed    *int64 `json:"last_used,omitempty"`
+}
+
+func (ps *TokenService) GetOwnTokenDetails() (*TokenDetails, error) {
 	httpDetails := ps.ServiceDetails.CreateHttpClientDetails()
-	resp, body, redirectUrl, err := ps.client.SendGet(ps.ServiceDetails.GetUrl()+ownTokenDetailsApi, false, &httpDetails)
-	if redirectErr := redirectError(resp, redirectUrl); redirectErr != nil {
-		return 0, nil, errorutils.CheckErrorf("GET %s: %s", ownTokenDetailsApi, redirectErr.Error())
-	}
+	resp, body, _, err := ps.client.SendGet(ps.ServiceDetails.GetUrl()+ownTokenDetailsApi, false, &httpDetails)
 	if resp == nil {
-		return 0, nil, err
+		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, nil, nil
+	if err = checkResponse(resp, body, ownTokenDetailsApi); err != nil {
+		return nil, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var details map[string]interface{}
-	if err = decoder.Decode(&details); err != nil || details == nil {
-		return resp.StatusCode, nil, errorutils.CheckErrorf("GET %s: the response is not a JSON object", ownTokenDetailsApi)
-	}
-	return resp.StatusCode, details, nil
+	var details TokenDetails
+	err = json.Unmarshal(body, &details)
+	return &details, errorutils.CheckError(err)
 }

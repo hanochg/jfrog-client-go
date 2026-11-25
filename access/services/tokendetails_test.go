@@ -1,7 +1,6 @@
 package services
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,41 +16,85 @@ func newTestTokenService(t *testing.T, serverUrl string, retries int) *TokenServ
 	return service
 }
 
-func TestGetOwnTokenDetails_SendsTokenAndDecodesDetails(t *testing.T) {
+const ownTokenDetailsResponse = `{
+  "token_id": "ecb9bfab-57b0-4683-b1a3-1d85acadcae0",
+  "subject": "jfac@01epbwg4fcnwfx1v868vmh04t7/users/hanochg",
+  "issued_at": 1795600937,
+  "issuer": "jfac@01epbwg4fcnwfx1v868vmh04t7",
+  "audience": "*@*",
+  "description": "",
+  "refreshable": false,
+  "scope": "applied-permissions/roles:abtest:\"Project Admin\",",
+  "project_key": "abtest",
+  "last_used": 1795600945
+}`
+
+func TestGetOwnTokenDetails_SendsTokenAndDecodesTheResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/access/api/v1/tokens/me", r.URL.Path)
 		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
-		_, _ = w.Write([]byte(`{"token_id":"t1","subject":"jfac@01h/users/alice","scope":"applied-permissions/user","expiry":1700003600}`))
+		_, _ = w.Write([]byte(ownTokenDetailsResponse))
 	}))
 	defer server.Close()
 
-	status, details, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
+	details, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, status)
-	assert.Equal(t, "jfac@01h/users/alice", details["subject"])
-	assert.Equal(t, json.Number("1700003600"), details["expiry"])
+	issuedAt, lastUsed, refreshable := int64(1795600937), int64(1795600945), false
+	assert.Equal(t, &TokenDetails{
+		TokenId:     "ecb9bfab-57b0-4683-b1a3-1d85acadcae0",
+		Subject:     "jfac@01epbwg4fcnwfx1v868vmh04t7/users/hanochg",
+		IssuedAt:    &issuedAt,
+		Issuer:      "jfac@01epbwg4fcnwfx1v868vmh04t7",
+		Audience:    "*@*",
+		Refreshable: &refreshable,
+		Scope:       `applied-permissions/roles:abtest:"Project Admin",`,
+		ProjectKey:  "abtest",
+		LastUsed:    &lastUsed,
+	}, details)
 }
 
-func TestGetOwnTokenDetails_ReturnsRejectStatusWithoutRetry(t *testing.T) {
+func TestGetOwnTokenDetails_FieldsAreOptional(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"token_id":"id-1","expiry":1800000000}`))
+	}))
+	defer server.Close()
+
+	details, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
+	require.NoError(t, err)
+	expiry := int64(1800000000)
+	assert.Equal(t, &TokenDetails{TokenId: "id-1", Expiry: &expiry}, details)
+}
+
+func TestGetOwnTokenDetails_RejectedTokenIsNotRetried(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		hits := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			hits++
 			w.WriteHeader(code)
-			_, _ = w.Write([]byte(`{"errors":[{"message":"bad"}]}`))
 		}))
-
-		status, details, err := newTestTokenService(t, server.URL, 2).GetOwnTokenDetails()
+		details, err := newTestTokenService(t, server.URL, 2).GetOwnTokenDetails()
 		server.Close()
-		require.NoError(t, err)
-		assert.Equal(t, code, status)
+		var rejected *TokenRejectedError
+		require.ErrorAs(t, err, &rejected)
+		assert.Equal(t, &TokenRejectedError{StatusCode: code, Api: "api/v1/tokens/me"}, rejected)
 		assert.Nil(t, details)
 		assert.Equal(t, 1, hits)
 	}
 }
 
-func TestGetOwnTokenDetails_ServerErrorKeepsStatusAfterRetries(t *testing.T) {
+func TestGetOwnTokenDetails_UnexpectedStatusIncludesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"NOT_FOUND","message":"Token not found"}]}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
+	assertResponseError(t, err, http.StatusNotFound)
+	assert.ErrorContains(t, err, "Token not found")
+}
+
+func TestGetOwnTokenDetails_ServerErrorAfterRetries(t *testing.T) {
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -59,10 +102,8 @@ func TestGetOwnTokenDetails_ServerErrorKeepsStatusAfterRetries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	status, details, err := newTestTokenService(t, server.URL, 2).GetOwnTokenDetails()
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Nil(t, details)
+	_, err := newTestTokenService(t, server.URL, 2).GetOwnTokenDetails()
+	assertResponseError(t, err, http.StatusServiceUnavailable)
 	assert.Equal(t, 3, hits)
 }
 
@@ -71,50 +112,26 @@ func TestGetOwnTokenDetails_TransportError(t *testing.T) {
 	service := newTestTokenService(t, server.URL, 0)
 	server.Close()
 
-	status, _, err := service.GetOwnTokenDetails()
+	details, err := service.GetOwnTokenDetails()
 	assert.Error(t, err)
-	assert.Zero(t, status)
+	assert.Nil(t, details)
 }
 
 func TestGetOwnTokenDetails_BodyIsNotAnObject(t *testing.T) {
-	for _, body := range []string{"null", "[1]", "not json"} {
+	for _, body := range []string{"<html>", `["a"]`} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(body))
 		}))
-
-		_, details, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
+		_, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
 		server.Close()
-		assert.ErrorContains(t, err, "api/v1/tokens/me", body)
-		assert.Nil(t, details, body)
+		assert.Error(t, err, body)
 	}
 }
 
 func TestGetOwnTokenDetails_DoesNotFollowRedirects(t *testing.T) {
-	targetHits := 0
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		targetHits++
-		_, _ = w.Write([]byte(`{"subject":"x"}`))
-	}))
-	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Location", target.URL+"/elsewhere")
-		w.WriteHeader(http.StatusFound)
-	}))
-	defer server.Close()
-
-	status, _, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
-	assert.ErrorContains(t, err, "redirects aren't followed")
-	assert.ErrorContains(t, err, target.URL)
-	assert.Zero(t, status)
-	assert.Zero(t, targetHits)
-}
-
-func TestGetOwnTokenDetails_RedirectStatusWithoutLocation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-
-	_, _, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
-	assert.ErrorContains(t, err, "redirects aren't followed")
+	server, targetHits := newRedirectingServer(t)
+	details, err := newTestTokenService(t, server.URL, 0).GetOwnTokenDetails()
+	assertResponseError(t, err, http.StatusFound)
+	assert.Nil(t, details)
+	assert.Zero(t, *targetHits)
 }

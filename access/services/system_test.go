@@ -8,6 +8,7 @@ import (
 	accessAuth "github.com/jfrog/jfrog-client-go/access/auth"
 	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +30,38 @@ func newTestSystemService(t *testing.T, serverUrl string, retries int) *SystemSe
 	return service
 }
 
+const artifactoryVersionResponse = `{
+  "version": "7.179.0",
+  "revision": "717900900",
+  "servicesVersions": {"package_handler_version": "5.1075.0"},
+  "addons": ["aol", "ha", "docker"],
+  "license": "f2cabf4612706b0844e2381c158207adafbc8df64",
+  "entitlements": {"EVENT_BASED_PULL_REPLICATION": true, "REPO_REPLICATION": true}
+}`
+
+func newRedirectingServer(t *testing.T) (*httptest.Server, *int) {
+	targetHits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL+"/elsewhere")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+	return server, &targetHits
+}
+
+func assertResponseError(t *testing.T, err error, statusCode int) *errorutils.HttpResponseError {
+	t.Helper()
+	var responseErr *errorutils.HttpResponseError
+	require.ErrorAs(t, err, &responseErr)
+	assert.Equal(t, statusCode, responseErr.StatusCode)
+	return responseErr
+}
+
 func TestGetRootCertificate_NoAuthHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/access/api/v1/cert/root", r.URL.Path)
@@ -42,15 +75,17 @@ func TestGetRootCertificate_NoAuthHeader(t *testing.T) {
 	assert.Equal(t, "QUJD", cert)
 }
 
-func TestGetRootCertificate_Non200(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	_, err := newTestSystemService(t, server.URL, 0).GetRootCertificate()
-	assert.ErrorContains(t, err, "404")
-	assert.ErrorContains(t, err, "api/v1/cert/root")
+func TestGetRootCertificate_Non200IncludesResponseBody(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusNotFound} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"no certificate"}]}`))
+		}))
+		_, err := newTestSystemService(t, server.URL, 0).GetRootCertificate()
+		server.Close()
+		assertResponseError(t, err, code)
+		assert.ErrorContains(t, err, "no certificate")
+	}
 }
 
 func TestGetRootCertificate_ServerErrorAfterRetries(t *testing.T) {
@@ -62,100 +97,107 @@ func TestGetRootCertificate_ServerErrorAfterRetries(t *testing.T) {
 	defer server.Close()
 
 	_, err := newTestSystemService(t, server.URL, 2).GetRootCertificate()
-	assert.ErrorContains(t, err, "503")
-	assert.ErrorContains(t, err, "api/v1/cert/root")
+	assertResponseError(t, err, http.StatusServiceUnavailable)
 	assert.Equal(t, 3, hits)
 }
 
 func TestGetRootCertificate_DoesNotFollowRedirects(t *testing.T) {
-	targetHits := 0
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		targetHits++
-		_, _ = w.Write([]byte("QUJD"))
-	}))
-	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Location", target.URL+"/elsewhere")
-		w.WriteHeader(http.StatusFound)
-	}))
-	defer server.Close()
-
+	server, targetHits := newRedirectingServer(t)
 	_, err := newTestSystemService(t, server.URL, 0).GetRootCertificate()
-	assert.ErrorContains(t, err, "redirects aren't followed")
-	assert.ErrorContains(t, err, target.URL)
-	assert.ErrorContains(t, err, "api/v1/cert/root")
-	assert.Zero(t, targetHits)
+	assertResponseError(t, err, http.StatusFound)
+	assert.Zero(t, *targetHits)
 }
 
-func TestGetRootCertificate_RedirectStatusWithoutLocation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-
-	_, err := newTestSystemService(t, server.URL, 0).GetRootCertificate()
-	assert.ErrorContains(t, err, "redirects aren't followed")
-}
-
-func TestGetRootCertificate_ErrorOmitsResponseBody(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte("\x1b[31mspoofed body"))
-	}))
-	defer server.Close()
-
-	_, err := newTestSystemService(t, server.URL, 0).GetRootCertificate()
-	assert.ErrorContains(t, err, "404")
-	assert.NotContains(t, err.Error(), "spoofed body")
-	assert.NotContains(t, err.Error(), "\x1b")
-	assert.NotContains(t, err.Error(), "server response")
-}
-
-func TestCheckArtifactoryVersion_SendsOnlyTheBearerToken(t *testing.T) {
+func TestGetArtifactoryVersion_SendsOnlyTheBearerTokenAndDecodesTheResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/artifactory/api/system/version", r.URL.Path)
 		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
-		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(artifactoryVersionResponse))
 	}))
 	defer server.Close()
 
-	status, err := newTestSystemService(t, server.URL, 0).CheckArtifactoryVersion()
+	version, err := newTestSystemService(t, server.URL, 0).GetArtifactoryVersion()
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, &ArtifactoryVersion{
+		Version:          "7.179.0",
+		Revision:         "717900900",
+		ServicesVersions: map[string]string{"package_handler_version": "5.1075.0"},
+		Addons:           []string{"aol", "ha", "docker"},
+		License:          "f2cabf4612706b0844e2381c158207adafbc8df64",
+		Entitlements:     map[string]bool{"EVENT_BASED_PULL_REPLICATION": true, "REPO_REPLICATION": true},
+	}, version)
 }
 
-func TestCheckArtifactoryVersion_RefusesWithoutToken(t *testing.T) {
+func TestGetArtifactoryVersion_FieldsAreOptional(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	version, err := newTestSystemService(t, server.URL, 0).GetArtifactoryVersion()
+	require.NoError(t, err)
+	assert.Equal(t, &ArtifactoryVersion{}, version)
+}
+
+func TestGetArtifactoryVersion_RefusesWithoutToken(t *testing.T) {
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
-		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 	service := newTestSystemService(t, server.URL, 0)
 	service.ServiceDetails.SetAccessToken("")
 
-	status, err := service.CheckArtifactoryVersion()
-	assert.ErrorContains(t, err, "no access token to check")
-	assert.Zero(t, status)
+	version, err := service.GetArtifactoryVersion()
+	assert.ErrorContains(t, err, "no access token to send")
+	assert.Nil(t, version)
 	assert.Zero(t, hits)
 }
 
-func TestCheckArtifactoryVersion_ReturnsRejectStatusWithoutRetry(t *testing.T) {
+func TestGetArtifactoryVersion_RefusesAnAccessUrlWithoutAccessPath(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+	}))
+	defer server.Close()
+	service := newTestSystemService(t, server.URL, 0)
+	service.ServiceDetails.SetUrl(server.URL + "/other/")
+
+	_, err := service.GetArtifactoryVersion()
+	assert.ErrorContains(t, err, "doesn't end with access/")
+	assert.Zero(t, hits)
+}
+
+func TestGetArtifactoryVersion_RejectedTokenIsNotRetried(t *testing.T) {
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		hits := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			hits++
 			w.WriteHeader(code)
 		}))
-		status, err := newTestSystemService(t, server.URL, 3).CheckArtifactoryVersion()
+		version, err := newTestSystemService(t, server.URL, 3).GetArtifactoryVersion()
 		server.Close()
-		require.NoError(t, err)
-		assert.Equal(t, code, status)
+		var rejected *TokenRejectedError
+		require.ErrorAs(t, err, &rejected)
+		assert.Equal(t, &TokenRejectedError{StatusCode: code, Api: "artifactory/api/system/version"}, rejected)
+		assert.Nil(t, version)
 		assert.Equal(t, 1, hits)
 	}
 }
 
-func TestCheckArtifactoryVersion_ServerErrorKeepsStatusAfterRetries(t *testing.T) {
+func TestGetArtifactoryVersion_UnexpectedStatusIncludesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"status":404,"message":"Not Found"}]}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestSystemService(t, server.URL, 0).GetArtifactoryVersion()
+	assertResponseError(t, err, http.StatusNotFound)
+	assert.ErrorContains(t, err, `"message": "Not Found"`)
+}
+
+func TestGetArtifactoryVersion_ServerErrorAfterRetries(t *testing.T) {
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
@@ -163,51 +205,35 @@ func TestCheckArtifactoryVersion_ServerErrorKeepsStatusAfterRetries(t *testing.T
 	}))
 	defer server.Close()
 
-	status, err := newTestSystemService(t, server.URL, 2).CheckArtifactoryVersion()
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusServiceUnavailable, status)
+	_, err := newTestSystemService(t, server.URL, 2).GetArtifactoryVersion()
+	assertResponseError(t, err, http.StatusServiceUnavailable)
 	assert.Equal(t, 3, hits)
 }
 
-func TestCheckArtifactoryVersion_TransportError(t *testing.T) {
+func TestGetArtifactoryVersion_TransportError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	service := newTestSystemService(t, server.URL, 0)
 	server.Close()
 
-	status, err := service.CheckArtifactoryVersion()
+	version, err := service.GetArtifactoryVersion()
 	assert.Error(t, err)
-	assert.Zero(t, status)
+	assert.Nil(t, version)
 }
 
-func TestCheckArtifactoryVersion_DoesNotFollowRedirects(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("the redirect was followed")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer target.Close()
+func TestGetArtifactoryVersion_BodyIsNotJson(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Location", target.URL+"/elsewhere")
-		w.WriteHeader(http.StatusFound)
+		_, _ = w.Write([]byte("<html>maintenance</html>"))
 	}))
 	defer server.Close()
 
-	status, err := newTestSystemService(t, server.URL, 0).CheckArtifactoryVersion()
-	assert.ErrorContains(t, err, "redirects aren't followed")
-	assert.Zero(t, status)
+	_, err := newTestSystemService(t, server.URL, 0).GetArtifactoryVersion()
+	assert.Error(t, err)
 }
 
-func TestCheckArtifactoryVersion_RefusesAnAccessUrlWithoutAccessPath(t *testing.T) {
-	hits := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	service := newTestSystemService(t, server.URL, 0)
-	service.ServiceDetails.SetUrl(server.URL + "/other/")
-
-	status, err := service.CheckArtifactoryVersion()
-	assert.ErrorContains(t, err, "doesn't end with access/")
-	assert.Zero(t, status)
-	assert.Zero(t, hits)
+func TestGetArtifactoryVersion_DoesNotFollowRedirects(t *testing.T) {
+	server, targetHits := newRedirectingServer(t)
+	version, err := newTestSystemService(t, server.URL, 0).GetArtifactoryVersion()
+	assertResponseError(t, err, http.StatusFound)
+	assert.Nil(t, version)
+	assert.Zero(t, *targetHits)
 }
